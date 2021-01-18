@@ -55,8 +55,9 @@ func setLogLevel() error {
 
 func printStartMessage() error {
 	log.WithFields(log.Fields{
-		"version": version,
-		"docs":    "https://www.chirpstack.io/gateway-bridge/",
+		"version":     version,
+		"SLS version": buildVersion,
+		"docs":        "https://www.chirpstack.io/gateway-bridge/",
 	}).Info("starting ChirpStack Gateway Bridge")
 	return nil
 }

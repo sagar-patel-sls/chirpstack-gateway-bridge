@@ -17,6 +17,8 @@ import (
 
 var cfgFile string // config file
 var version string
+var buildVersion string
+var buildDate string
 
 var rootCmd = &cobra.Command{
 	Use:   "chirpstack-gateway-bridge",
@@ -78,8 +80,10 @@ func init() {
 }
 
 // Execute executes the root command.
-func Execute(v string) {
+func Execute(v string, bVersion string, bTime string) {
 	version = v
+	buildVersion = bVersion
+	buildDate = bTime
 	if err := rootCmd.Execute(); err != nil {
 		log.Fatal(err)
 	}

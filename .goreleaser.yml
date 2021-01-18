@@ -6,6 +6,7 @@ env:
 builds:
   - main: cmd/chirpstack-gateway-bridge/main.go
     binary: chirpstack-gateway-bridge
+    ldflags: -X "main.version={{.Version}}" -X "main.buildVersion={{.Env.BUILDVERSION}}" -X "main.buildDate={{.Env.BUILDDATE}} {{.Env.BUILDTIME}}"
     goos:
       - windows
       - darwin
@@ -37,7 +38,7 @@ nfpm:
   license: MIT
   formats:
     - deb
-    - rpm
+    #- rpm
   bindir: /usr/bin
   files:
     "packaging/files/chirpstack-gateway-bridge.rotate": "/etc/logrotate.d/chirpstack-gateway-bridge"

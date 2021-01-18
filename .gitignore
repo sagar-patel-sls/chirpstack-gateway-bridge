@@ -30,3 +30,6 @@ Vagrantfile
 
 # certificates
 /certs
+
+# workspace
+*.code-workspace

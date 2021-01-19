@@ -139,7 +139,15 @@ func GetMetaData(metaData map[string]string) map[string]string {
 			}
 		}
 	} else {
-		newKV["MetaData"] = metaData["MetaData"]
+		kv := strings.SplitN(metaData["MetaData"], splitDelimiter, 2)
+		if len(kv) != 2 {
+			log.WithFields(log.Fields{
+				"row":             metaData["MetaData"],
+				"split_delimiter": splitDelimiter,
+			}).Warning("metadata: can not split output in key / value")
+		} else {
+			newKV[kv[0]] = kv[1]
+		}
 	}
 
 	return newKV

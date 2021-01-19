@@ -26,11 +26,12 @@ type Backend struct {
 	commandSock       zmq4.Socket
 	commandMux        sync.Mutex
 
-	downlinkTXAckChan  chan gw.DownlinkTXAck
-	uplinkFrameChan    chan gw.UplinkFrame
-	gatewayStatsChan   chan gw.GatewayStats
-	subscribeEventChan chan events.Subscribe
-	disconnectChan     chan lorawan.EUI64
+	// Callback functions for handling events.
+	downlinkTxAckFunc           func(gw.DownlinkTXAck)
+	gatewayStatsFunc            func(gw.GatewayStats)
+	uplinkFrameFunc             func(gw.UplinkFrame)
+	rawPacketForwarderEventFunc func(gw.RawPacketForwarderEvent)
+	subscribeEventFunc          func(events.Subscribe)
 
 	eventURL   string
 	commandURL string
@@ -48,29 +49,11 @@ func NewBackend(conf config.Config) (*Backend, error) {
 	}).Info("backend/concentratord: setting up backend")
 
 	b := Backend{
-		downlinkTXAckChan:  make(chan gw.DownlinkTXAck, 1),
-		uplinkFrameChan:    make(chan gw.UplinkFrame, 1),
-		gatewayStatsChan:   make(chan gw.GatewayStats, 1),
-		subscribeEventChan: make(chan events.Subscribe, 1),
-
 		eventURL:   conf.Backend.Concentratord.EventURL,
 		commandURL: conf.Backend.Concentratord.CommandURL,
 
 		crcCheck: conf.Backend.Concentratord.CRCCheck,
 	}
-
-	b.dialEventSockLoop()
-	b.dialCommandSockLoop()
-
-	var err error
-	b.gatewayID, err = b.getGatewayID()
-	if err != nil {
-		return nil, errors.Wrap(err, "get gateway id error")
-	}
-
-	b.subscribeEventChan <- events.Subscribe{Subscribe: true, GatewayID: b.gatewayID}
-
-	go b.eventLoop()
 
 	return &b, nil
 }
@@ -149,8 +132,31 @@ func (b *Backend) getGatewayID() (lorawan.EUI64, error) {
 	return gatewayID, nil
 }
 
-// Close closes the backend.
-func (b *Backend) Close() error {
+// Start starts the backend.
+func (b *Backend) Start() error {
+	b.dialEventSockLoop()
+	b.dialCommandSockLoop()
+
+	var err error
+	b.gatewayID, err = b.getGatewayID()
+	if err != nil {
+		return errors.Wrap(err, "get gateway id error")
+	}
+
+	if b.subscribeEventFunc != nil {
+		b.subscribeEventFunc(events.Subscribe{
+			Subscribe: true,
+			GatewayID: b.gatewayID,
+		})
+	}
+
+	go b.eventLoop()
+
+	return nil
+}
+
+// Stop stops the backend.
+func (b *Backend) Stop() error {
 	b.eventSock.Close()
 	b.commandSock.Close()
 
@@ -160,29 +166,34 @@ func (b *Backend) Close() error {
 	return nil
 }
 
-// GetDownlinkTXAckChan returns the channel for downlink tx acknowledgements.
-func (b *Backend) GetDownlinkTXAckChan() chan gw.DownlinkTXAck {
-	return b.downlinkTXAckChan
+// SetDownlinkTxAckFunc sets the DownlinkTXAck handler func.
+func (b *Backend) SetDownlinkTxAckFunc(f func(gw.DownlinkTXAck)) {
+	b.downlinkTxAckFunc = f
+}
+
+// SetGatewayStatsFunc sets the GatewayStats handler func.
+func (b *Backend) SetGatewayStatsFunc(f func(gw.GatewayStats)) {
+	b.gatewayStatsFunc = f
+}
+
+// SetUplinkFrameFunc sets the UplinkFrame handler func.
+func (b *Backend) SetUplinkFrameFunc(f func(gw.UplinkFrame)) {
+	b.uplinkFrameFunc = f
+}
+
+// SetRawPacketForwarderEventFunc sets the RawPacketForwarderEvent handler func.
+func (b *Backend) SetRawPacketForwarderEventFunc(f func(gw.RawPacketForwarderEvent)) {
+	b.rawPacketForwarderEventFunc = f
+}
+
+// SetSubscribeEventFunc sets the Subscribe handler func.
+func (b *Backend) SetSubscribeEventFunc(f func(events.Subscribe)) {
+	b.subscribeEventFunc = f
 }
 
 // GetMqttDisconnectFrameChan returns the mqtt connection/disconnection.
 func (b *Backend) GetMqttDisconnectFrameChan(frame packets.PushACKPacket) error {
 	return nil
-}
-
-// GetGatewayStatsChan returns the channel for gateway statistics.
-func (b *Backend) GetGatewayStatsChan() chan gw.GatewayStats {
-	return b.gatewayStatsChan
-}
-
-// GetUplinkFrameChan returns the channel for received uplinks.
-func (b *Backend) GetUplinkFrameChan() chan gw.UplinkFrame {
-	return b.uplinkFrameChan
-}
-
-// GetSubscribeEventChan returns the channel for the (un)subscribe events.
-func (b *Backend) GetSubscribeEventChan() chan events.Subscribe {
-	return b.subscribeEventChan
 }
 
 // SendDownlinkFrame sends the given downlink frame.
@@ -214,7 +225,9 @@ func (b *Backend) SendDownlinkFrame(pl gw.DownlinkFrame) error {
 		return errors.Wrap(err, "protobuf unmarshal error")
 	}
 
-	b.downlinkTXAckChan <- ack
+	if b.downlinkTxAckFunc != nil {
+		b.downlinkTxAckFunc(ack)
+	}
 
 	commandCounter("down").Inc()
 
@@ -246,11 +259,6 @@ func (b *Backend) ApplyConfiguration(config gw.GatewayConfiguration) error {
 
 	commandCounter("config").Inc()
 
-	return nil
-}
-
-// GetRawPacketForwarderEventChan returns nil.
-func (b *Backend) GetRawPacketForwarderEventChan() chan gw.RawPacketForwarderEvent {
 	return nil
 }
 
@@ -369,7 +377,9 @@ func (b *Backend) handleUplinkFrame(bb []byte) error {
 		"uplink_id": uplinkID,
 	}).Info("backend/concentratord: uplink event received")
 
-	b.uplinkFrameChan <- pl
+	if b.uplinkFrameFunc != nil {
+		b.uplinkFrameFunc(pl)
+	}
 
 	return nil
 }
@@ -388,7 +398,9 @@ func (b *Backend) handleGatewayStats(bb []byte) error {
 		"stats_id": statsID,
 	}).Info("backend/concentratord: stats event received")
 
-	b.gatewayStatsChan <- pl
+	if b.gatewayStatsFunc != nil {
+		b.gatewayStatsFunc(pl)
+	}
 
 	return nil
 }

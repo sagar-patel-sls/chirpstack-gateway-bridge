@@ -36,11 +36,14 @@ type Backend struct {
 	// downlink opportunities (e.g. RX1 and RX2).
 	cache *cache.Cache
 
-	downlinkTXAckChan     chan gw.DownlinkTXAck
-	uplinkFrameChan       chan gw.UplinkFrame
-	gatewayStatsChan      chan gw.GatewayStats
-	udpSendChan           chan udpPacket
-	mqttDisconnectionChan chan packets.PullACKPacket
+	// Callback functions for handling events.
+	downlinkTxAckFunc           func(gw.DownlinkTXAck)
+	gatewayStatsFunc            func(gw.GatewayStats)
+	uplinkFrameFunc             func(gw.UplinkFrame)
+	rawPacketForwarderEventFunc func(gw.RawPacketForwarderEvent)
+	mqttDisconnectionChan       chan packets.PullACKPacket
+
+	udpSendChan chan udpPacket
 
 	wg           sync.WaitGroup
 	conn         *net.UDPConn
@@ -65,20 +68,16 @@ func NewBackend(conf config.Config) (*Backend, error) {
 	}
 
 	b := &Backend{
-		conn:              conn,
-		downlinkTXAckChan: make(chan gw.DownlinkTXAck),
-		uplinkFrameChan:   make(chan gw.UplinkFrame),
-		gatewayStatsChan:  make(chan gw.GatewayStats),
-		udpSendChan:       make(chan udpPacket),
-		gateways: gateways{
-			gateways:           make(map[lorawan.EUI64]gateway),
-			subscribeEventChan: make(chan events.Subscribe),
-		},
-		fakeRxTime:            conf.Backend.SemtechUDP.FakeRxTime,
-		skipCRCCheck:          conf.Backend.SemtechUDP.SkipCRCCheck,
-		cache:                 cache.New(15*time.Second, 15*time.Second),
+		conn:                  conn,
+		udpSendChan:           make(chan udpPacket),
 		mqttDisconnectionChan: make(chan packets.PullACKPacket),
-		mqttStatus:            65534,
+		gateways: gateways{
+			gateways: make(map[lorawan.EUI64]gateway),
+		},
+		fakeRxTime:   conf.Backend.SemtechUDP.FakeRxTime,
+		skipCRCCheck: conf.Backend.SemtechUDP.SkipCRCCheck,
+		cache:        cache.New(15*time.Second, 15*time.Second),
+		mqttStatus:   65534,
 	}
 
 	go func() {
@@ -91,6 +90,11 @@ func NewBackend(conf config.Config) (*Backend, error) {
 		}
 	}()
 
+	return b, nil
+}
+
+// Start stats the backend.
+func (b *Backend) Start() error {
 	// Add the waitgroups before the goroutines or a race occurs with closing
 	b.wg.Add(2)
 	go func() {
@@ -109,11 +113,11 @@ func NewBackend(conf config.Config) (*Backend, error) {
 		b.wg.Done()
 	}()
 
-	return b, nil
+	return nil
 }
 
-// Close closes the backend.
-func (b *Backend) Close() error {
+// Stop stops the backend.
+func (b *Backend) Stop() error {
 	b.Lock()
 	b.closed = true
 
@@ -128,6 +132,31 @@ func (b *Backend) Close() error {
 	b.Unlock()
 	b.wg.Wait()
 	return nil
+}
+
+// SetDownlinkTxAckFunc sets the DownlinkTXAck handler func.
+func (b *Backend) SetDownlinkTxAckFunc(f func(gw.DownlinkTXAck)) {
+	b.downlinkTxAckFunc = f
+}
+
+// SetGatewayStatsFunc sets the GatewayStats handler func.
+func (b *Backend) SetGatewayStatsFunc(f func(gw.GatewayStats)) {
+	b.gatewayStatsFunc = f
+}
+
+// SetUplinkFrameFunc sets the UplinkFrame handler func.
+func (b *Backend) SetUplinkFrameFunc(f func(gw.UplinkFrame)) {
+	b.uplinkFrameFunc = f
+}
+
+// SetSubscribeEventFunc sets the Subscribe handler func.
+func (b *Backend) SetSubscribeEventFunc(f func(events.Subscribe)) {
+	b.gateways.subscribeEventFunc = f
+}
+
+// SetRawPacketForwarderEventFunc sets the RawPacketForwarderEvent handler func.
+func (b *Backend) SetRawPacketForwarderEventFunc(func(gw.RawPacketForwarderEvent)) {
+	// not provided by the Semtech packet-forwarder.
 }
 
 // GetMqttDisconnectFrameChan returns the mqtt connection/disconnection.
@@ -151,32 +180,6 @@ func (b *Backend) GetMqttDisconnectFrameChan(frame packets.PushACKPacket) error 
 			"data":             frame.RandomToken,
 		}).Info("integration/semtechudp: MQTT Connection Acknowledgement sended")
 	}
-	return nil
-}
-
-// GetDownlinkTXAckChan returns the downlink tx ack channel.
-func (b *Backend) GetDownlinkTXAckChan() chan gw.DownlinkTXAck {
-	return b.downlinkTXAckChan
-}
-
-// GetGatewayStatsChan returns the gateway stats channel.
-func (b *Backend) GetGatewayStatsChan() chan gw.GatewayStats {
-	return b.gatewayStatsChan
-}
-
-// GetUplinkFrameChan returns the uplink frame channel.
-func (b *Backend) GetUplinkFrameChan() chan gw.UplinkFrame {
-	return b.uplinkFrameChan
-}
-
-// GetSubscribeEventChan return the (un)subscribe event channel.
-func (b *Backend) GetSubscribeEventChan() chan events.Subscribe {
-	return b.gateways.subscribeEventChan
-}
-
-// GetRawPacketForwarderEventChan returns the raw packet-forwarder command channel.
-func (b *Backend) GetRawPacketForwarderEventChan() chan gw.RawPacketForwarderEvent {
-	// not provided by the Semtech packet-forwarder.
 	return nil
 }
 
@@ -438,11 +441,13 @@ func (b *Backend) handleTXACK(up udpPacket) error {
 		}
 
 		// report acks
-		b.downlinkTXAckChan <- gw.DownlinkTXAck{
-			GatewayId:  p.GatewayMAC[:],
-			Token:      uint32(p.RandomToken),
-			DownlinkId: frame.DownlinkId,
-			Items:      txAckItems,
+		if b.downlinkTxAckFunc != nil {
+			b.downlinkTxAckFunc(gw.DownlinkTXAck{
+				GatewayId:  p.GatewayMAC[:],
+				Token:      uint32(p.RandomToken),
+				DownlinkId: frame.DownlinkId,
+				Items:      txAckItems,
+			})
 		}
 	} else {
 		// no error
@@ -450,11 +455,13 @@ func (b *Backend) handleTXACK(up udpPacket) error {
 			Status: gw.TxAckStatus_OK,
 		}
 
-		b.downlinkTXAckChan <- gw.DownlinkTXAck{
-			GatewayId:  p.GatewayMAC[:],
-			Token:      uint32(p.RandomToken),
-			DownlinkId: frame.DownlinkId,
-			Items:      txAckItems,
+		if b.downlinkTxAckFunc != nil {
+			b.downlinkTxAckFunc(gw.DownlinkTXAck{
+				GatewayId:  p.GatewayMAC[:],
+				Token:      uint32(p.RandomToken),
+				DownlinkId: frame.DownlinkId,
+				Items:      txAckItems,
+			})
 		}
 	}
 
@@ -477,14 +484,10 @@ func (b *Backend) handlePushData(up udpPacket) error {
 	if err != nil {
 		return err
 	}
-
 	b.udpSendChan <- udpPacket{
 		addr: up.addr,
 		data: bytes,
 	}
-
-	fmt.Println(bytes)
-
 	// gateway stats
 	stats, err := p.GetGatewayStats()
 	if err != nil {
@@ -518,13 +521,17 @@ func (b *Backend) handlePushData(up udpPacket) error {
 }
 
 func (b *Backend) handleStats(gatewayID lorawan.EUI64, stats gw.GatewayStats) {
-	b.gatewayStatsChan <- stats
+	if b.gatewayStatsFunc != nil {
+		b.gatewayStatsFunc(stats)
+	}
 }
 
 func (b *Backend) handleUplinkFrames(uplinkFrames []gw.UplinkFrame) error {
 	for i := range uplinkFrames {
 		if filters.MatchFilters(uplinkFrames[i].PhyPayload) {
-			b.uplinkFrameChan <- uplinkFrames[i]
+			if b.uplinkFrameFunc != nil {
+				b.uplinkFrameFunc(uplinkFrames[i])
+			}
 		} else {
 			log.WithFields(log.Fields{
 				"data_base64": base64.StdEncoding.EncodeToString(uplinkFrames[i].PhyPayload),

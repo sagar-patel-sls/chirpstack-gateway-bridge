@@ -3,7 +3,6 @@ package mqtt
 import (
 	"bytes"
 	"fmt"
-	"net"
 	"strings"
 	"sync"
 	"text/template"
@@ -25,21 +24,25 @@ import (
 
 // Backend implements a MQTT backend.
 type Backend struct {
-	sync.RWMutex
+	auth auth.Authentication
 
-	auth                          auth.Authentication
-	conn                          paho.Client
-	udpConn                       *net.UDPConn
-	closed                        bool
-	mqttStatus                    bool
-	clientOpts                    *paho.ClientOptions
-	downlinkFrameChan             chan gw.DownlinkFrame
+	conn       paho.Client
+	connMux    sync.RWMutex
+	connClosed bool
+	mqttStatus bool
+	clientOpts *paho.ClientOptions
+
+	downlinkFrameFunc             func(gw.DownlinkFrame)
+	gatewayConfigurationFunc      func(gw.GatewayConfiguration)
+	gatewayCommandExecRequestFunc func(gw.GatewayCommandExecRequest)
+	rawPacketForwarderCommandFunc func(gw.RawPacketForwarderCommand)
 	mqttDisconnectionChan         chan packets.PushACKPacket
-	gatewayConfigurationChan      chan gw.GatewayConfiguration
-	gatewayCommandExecRequestChan chan gw.GatewayCommandExecRequest
-	rawPacketForwarderCommandChan chan gw.RawPacketForwarderCommand
-	gateways                      map[lorawan.EUI64]struct{}
-	terminateOnConnectError       bool
+
+	gatewaysMux             sync.RWMutex
+	gateways                map[lorawan.EUI64]struct{}
+	gatewaysSubscribedMux   sync.Mutex
+	gatewaysSubscribed      map[lorawan.EUI64]struct{}
+	terminateOnConnectError bool
 
 	qos                  uint8
 	eventTopicTemplate   *template.Template
@@ -54,15 +57,12 @@ func NewBackend(conf config.Config) (*Backend, error) {
 	var err error
 
 	b := Backend{
-		qos:                           conf.Integration.MQTT.Auth.Generic.QOS,
-		terminateOnConnectError:       conf.Integration.MQTT.TerminateOnConnectError,
-		clientOpts:                    paho.NewClientOptions(),
-		downlinkFrameChan:             make(chan gw.DownlinkFrame),
-		gatewayConfigurationChan:      make(chan gw.GatewayConfiguration),
-		gatewayCommandExecRequestChan: make(chan gw.GatewayCommandExecRequest),
-		rawPacketForwarderCommandChan: make(chan gw.RawPacketForwarderCommand),
-		gateways:                      make(map[lorawan.EUI64]struct{}),
-		mqttDisconnectionChan:         make(chan packets.PushACKPacket),
+		qos:                     conf.Integration.MQTT.Auth.Generic.QOS,
+		terminateOnConnectError: conf.Integration.MQTT.TerminateOnConnectError,
+		clientOpts:              paho.NewClientOptions(),
+		gateways:                make(map[lorawan.EUI64]struct{}),
+		gatewaysSubscribed:      make(map[lorawan.EUI64]struct{}),
+		mqttDisconnectionChan:   make(chan packets.PushACKPacket),
 	}
 
 	switch conf.Integration.MQTT.Auth.Type {
@@ -141,22 +141,46 @@ func NewBackend(conf config.Config) (*Backend, error) {
 		return nil, errors.Wrap(err, "mqtt: init authentication error")
 	}
 
-	b.connectLoop()
-	go b.reconnectLoop()
-
 	return &b, nil
 }
 
-// Close closes the backend.
-func (b *Backend) Close() error {
-	b.Lock()
-	b.closed = true
+// Start starts the integration.
+func (b *Backend) Start() error {
+	b.connectLoop()
 	b.mqttStatus = false
-	b.Unlock()
+	go b.reconnectLoop()
+	go b.subscribeLoop()
+	return nil
+}
+
+// Stop stops the integration.
+func (b *Backend) Stop() error {
+	b.connMux.Lock()
+	defer b.connMux.Unlock()
 
 	b.conn.Disconnect(250)
-
+	b.connClosed = true
 	return nil
+}
+
+// SetDownlinkFrameFunc sets the DownlinkFrame handler func.
+func (b *Backend) SetDownlinkFrameFunc(f func(gw.DownlinkFrame)) {
+	b.downlinkFrameFunc = f
+}
+
+// SetGatewayConfigurationFunc sets the GatewayConfiguration handler func.
+func (b *Backend) SetGatewayConfigurationFunc(f func(gw.GatewayConfiguration)) {
+	b.gatewayConfigurationFunc = f
+}
+
+// SetGatewayCommandExecRequestFunc sets the GatewayCommandExecRequest handler func.
+func (b *Backend) SetGatewayCommandExecRequestFunc(f func(gw.GatewayCommandExecRequest)) {
+	b.gatewayCommandExecRequestFunc = f
+}
+
+// SetRawPacketForwarderCommandFunc sets the RawPacketForwarderCommand handler func.
+func (b *Backend) SetRawPacketForwarderCommandFunc(f func(gw.RawPacketForwarderCommand)) {
+	b.rawPacketForwarderCommandFunc = f
 }
 
 // GetMqttDownlinkFrameChan returns the mqtt connection/disconnection.
@@ -164,65 +188,23 @@ func (b *Backend) GetMqttDownlinkFrameChan() chan packets.PushACKPacket {
 	return b.mqttDisconnectionChan
 }
 
-// GetDownlinkFrameChan returns the downlink frame channel.
-func (b *Backend) GetDownlinkFrameChan() chan gw.DownlinkFrame {
-	return b.downlinkFrameChan
-}
-
-// GetGatewayConfigurationChan returns the gateway configuration channel.
-func (b *Backend) GetGatewayConfigurationChan() chan gw.GatewayConfiguration {
-	return b.gatewayConfigurationChan
-}
-
-// GetGatewayCommandExecRequestChan returns the channel for gateway command execution.
-func (b *Backend) GetGatewayCommandExecRequestChan() chan gw.GatewayCommandExecRequest {
-	return b.gatewayCommandExecRequestChan
-}
-
-// GetRawPacketForwarderChan returns the channel for raw packet-forwarder commands.
-func (b *Backend) GetRawPacketForwarderChan() chan gw.RawPacketForwarderCommand {
-	return b.rawPacketForwarderCommandChan
-}
-
-// SetGatewaySubscription (un)subscribes the given gateway.
+// SetGatewaySubscription sets or unsets the gateway.
+// Note: the actual MQTT (un)subscribe happens in a separate function to avoid
+// race conditions in case of connection issues. This way, the gateways map
+// always reflect the desired state.
 func (b *Backend) SetGatewaySubscription(subscribe bool, gatewayID lorawan.EUI64) error {
-	b.Lock()
-	defer b.Unlock()
-
 	log.WithFields(log.Fields{
 		"gateway_id": gatewayID,
 		"subscribe":  subscribe,
-	}).Debug("integration/mqtt: set gateway subscription called")
+	}).Debug("integration/mqtt: set gateway subscription")
 
-	_, ok := b.gateways[gatewayID]
-	if ok == subscribe {
-		return nil
-	}
+	b.gatewaysMux.Lock()
+	defer b.gatewaysMux.Unlock()
 
-	for {
-		if subscribe {
-			if err := b.subscribeGateway(gatewayID); err != nil {
-				log.WithError(err).WithFields(log.Fields{
-					"gateway_id": gatewayID,
-				}).Error("integration/mqtt: subscribe gateway error")
-				time.Sleep(time.Second)
-				continue
-			}
-
-			b.gateways[gatewayID] = struct{}{}
-		} else {
-			if err := b.unsubscribeGateway(gatewayID); err != nil {
-				log.WithError(err).WithFields(log.Fields{
-					"gateway_id": gatewayID,
-				}).Error("integration/mqtt: unsubscribe gateway error")
-				time.Sleep(time.Second)
-				continue
-			}
-
-			delete(b.gateways, gatewayID)
-		}
-
-		break
+	if subscribe {
+		b.gateways[gatewayID] = struct{}{}
+	} else {
+		delete(b.gateways, gatewayID)
 	}
 
 	return nil
@@ -276,8 +258,8 @@ func (b *Backend) PublishEvent(gatewayID lorawan.EUI64, event string, id uuid.UU
 }
 
 func (b *Backend) connect() error {
-	b.Lock()
-	defer b.Unlock()
+	b.connMux.Lock()
+	defer b.connMux.Unlock()
 
 	if err := b.auth.Update(b.clientOpts); err != nil {
 		return errors.Wrap(err, "integration/mqtt: update authentication error")
@@ -317,8 +299,8 @@ func (b *Backend) disconnect() error {
 	b.mqttStatus = false
 	go b.handleMqttDisconnectionFrame(false)
 
-	b.Lock()
-	defer b.Unlock()
+	b.connMux.Lock()
+	defer b.connMux.Unlock()
 
 	b.conn.Disconnect(250)
 	return nil
@@ -327,7 +309,11 @@ func (b *Backend) disconnect() error {
 func (b *Backend) reconnectLoop() {
 	if b.auth.ReconnectAfter() > 0 {
 		for {
-			if b.closed {
+			b.connMux.RLock()
+			closed := b.connClosed
+			b.connMux.RUnlock()
+
+			if closed {
 				break
 			}
 			time.Sleep(b.auth.ReconnectAfter())
@@ -345,22 +331,71 @@ func (b *Backend) onConnected(c paho.Client) {
 	mqttConnectCounter().Inc()
 	b.mqttStatus = true
 	go b.handleMqttDisconnectionFrame(true)
-
-	b.RLock()
-	defer b.RUnlock()
-
 	log.Info("integration/mqtt: connected to mqtt broker")
 
-	for gatewayID := range b.gateways {
-		for {
-			if err := b.subscribeGateway(gatewayID); err != nil {
-				log.WithError(err).WithField("gateway_id", gatewayID).Error("integration/mqtt: subscribe gateway error")
-				time.Sleep(time.Second)
-				continue
-			}
+	b.gatewaysSubscribedMux.Lock()
+	defer b.gatewaysSubscribedMux.Unlock()
 
+	// reset the subscriptions as we have a new connection
+	// note: this is done in the onConnected function because the subscribeLoop
+	// locks the gatewaysSubscribedMux and will only release it after all
+	// (un)subscribe operations have been completed. If it would be done in the
+	// onConnectionLost function, the function could block until the connection
+	// is restored because the (un)subscribe operations will block until then.
+	b.gatewaysSubscribed = make(map[lorawan.EUI64]struct{})
+}
+
+func (b *Backend) subscribeLoop() {
+	for {
+		b.connMux.RLock()
+		closed := b.connClosed
+		b.connMux.RUnlock()
+		if closed {
 			break
 		}
+
+		var subscribe []lorawan.EUI64
+		var unsubscribe []lorawan.EUI64
+
+		b.gatewaysMux.RLock()
+		b.gatewaysSubscribedMux.Lock()
+
+		// subscribe
+		for gatewayID := range b.gateways {
+			if _, ok := b.gatewaysSubscribed[gatewayID]; !ok {
+				subscribe = append(subscribe, gatewayID)
+			}
+		}
+
+		// unsubscribe
+		for gatewayID := range b.gatewaysSubscribed {
+			if _, ok := b.gateways[gatewayID]; !ok {
+				unsubscribe = append(unsubscribe, gatewayID)
+			}
+		}
+
+		// unlock gatewaysMux so that SetGatewaySubscription can write again
+		// to the map, in which case changes are picked up in the next run
+		b.gatewaysMux.RUnlock()
+
+		for _, gatewayID := range subscribe {
+			if err := b.subscribeGateway(gatewayID); err != nil {
+				log.WithError(err).WithField("gateway_id", gatewayID).Error("integration/mqtt: subscribe gateway error")
+			} else {
+				b.gatewaysSubscribed[gatewayID] = struct{}{}
+			}
+		}
+
+		for _, gatewayID := range unsubscribe {
+			if err := b.unsubscribeGateway(gatewayID); err != nil {
+				log.WithError(err).WithField("gateway_id", gatewayID).Error("integration/mqtt: unsubscribe gateway error")
+			} else {
+				delete(b.gatewaysSubscribed, gatewayID)
+			}
+		}
+
+		b.gatewaysSubscribedMux.Unlock()
+		time.Sleep(time.Millisecond * 100)
 	}
 }
 
@@ -420,7 +455,9 @@ func (b *Backend) handleDownlinkFrame(c paho.Client, msg paho.Message) {
 		"downlink_id": downID,
 	}).Info("integration/mqtt: downlink frame received")
 
-	b.downlinkFrameChan <- downlinkFrame
+	if b.downlinkFrameFunc != nil {
+		b.downlinkFrameFunc(downlinkFrame)
+	}
 }
 
 func (b *Backend) handleGatewayConfiguration(c paho.Client, msg paho.Message) {
@@ -434,7 +471,9 @@ func (b *Backend) handleGatewayConfiguration(c paho.Client, msg paho.Message) {
 		return
 	}
 
-	b.gatewayConfigurationChan <- gatewayConfig
+	if b.gatewayConfigurationFunc != nil {
+		b.gatewayConfigurationFunc(gatewayConfig)
+	}
 }
 
 func (b *Backend) handleGatewayCommandExecRequest(c paho.Client, msg paho.Message) {
@@ -456,7 +495,9 @@ func (b *Backend) handleGatewayCommandExecRequest(c paho.Client, msg paho.Messag
 		"exec_id":    execID,
 	}).Info("integration/mqtt: gateway command execution request received")
 
-	b.gatewayCommandExecRequestChan <- gatewayCommandExecRequest
+	if b.gatewayCommandExecRequestFunc != nil {
+		b.gatewayCommandExecRequestFunc(gatewayCommandExecRequest)
+	}
 }
 
 func (b *Backend) handleRawPacketForwarderCommand(c paho.Client, msg paho.Message) {
@@ -478,7 +519,9 @@ func (b *Backend) handleRawPacketForwarderCommand(c paho.Client, msg paho.Messag
 		"raw_id":     rawID,
 	}).Info("integration/mqtt: raw packet-forwarder command received")
 
-	b.rawPacketForwarderCommandChan <- rawPacketForwarderCommand
+	if b.rawPacketForwarderCommandFunc != nil {
+		b.rawPacketForwarderCommandFunc(rawPacketForwarderCommand)
+	}
 }
 
 func (b *Backend) handleCommand(c paho.Client, msg paho.Message) {

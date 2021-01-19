@@ -65,13 +65,14 @@ func (ts *MQTTBackendTestSuite) SetupSuite() {
 	var err error
 	ts.backend, err = NewBackend(conf)
 	assert.NoError(err)
+	assert.NoError(ts.backend.Start())
 	assert.NoError(ts.backend.SetGatewaySubscription(true, ts.gatewayID))
 	time.Sleep(100 * time.Millisecond)
 }
 
 func (ts *MQTTBackendTestSuite) TearDownSuite() {
 	ts.mqttClient.Disconnect(0)
-	ts.backend.Close()
+	ts.backend.Stop()
 }
 
 func (ts *MQTTBackendTestSuite) TestSubscribeGateway() {
@@ -174,6 +175,10 @@ func (ts *MQTTBackendTestSuite) TestPublishDownlinkTXAck() {
 
 func (ts *MQTTBackendTestSuite) TestDownlinkFrameHandler() {
 	assert := require.New(ts.T())
+	downlinkFrameChan := make(chan gw.DownlinkFrame, 1)
+	ts.backend.SetDownlinkFrameFunc(func(pl gw.DownlinkFrame) {
+		downlinkFrameChan <- pl
+	})
 
 	downlink := gw.DownlinkFrame{
 		Items: []*gw.DownlinkFrameItem{
@@ -190,17 +195,20 @@ func (ts *MQTTBackendTestSuite) TestDownlinkFrameHandler() {
 	token.Wait()
 	assert.NoError(token.Error())
 
-	receivedDownlink := <-ts.backend.GetDownlinkFrameChan()
+	receivedDownlink := <-downlinkFrameChan
 	assert.Equal(downlink, receivedDownlink)
 }
 
 func (ts *MQTTBackendTestSuite) TestGatewayConfigHandler() {
 	assert := require.New(ts.T())
+	gatewayConfigurationChan := make(chan gw.GatewayConfiguration, 1)
+	ts.backend.SetGatewayConfigurationFunc(func(pl gw.GatewayConfiguration) {
+		gatewayConfigurationChan <- pl
+	})
 
 	config := gw.GatewayConfiguration{
 		GatewayId: ts.gatewayID[:],
 		Version:   "123",
-		Channels:  []*gw.ChannelConfiguration{},
 	}
 
 	b, err := ts.backend.marshal(&config)
@@ -210,12 +218,17 @@ func (ts *MQTTBackendTestSuite) TestGatewayConfigHandler() {
 	token.Wait()
 	assert.NoError(token.Error())
 
-	receivedConfig := <-ts.backend.GetGatewayConfigurationChan()
+	receivedConfig := <-gatewayConfigurationChan
 	assert.Equal(config, receivedConfig)
 }
 
 func (ts *MQTTBackendTestSuite) TestGatewayCommandExecRequest() {
 	assert := require.New(ts.T())
+	gatewayComandExecRequestChan := make(chan gw.GatewayCommandExecRequest, 1)
+	ts.backend.SetGatewayCommandExecRequestFunc(func(pl gw.GatewayCommandExecRequest) {
+		gatewayComandExecRequestChan <- pl
+	})
+
 	id, err := uuid.NewV4()
 	assert.NoError(err)
 
@@ -235,12 +248,17 @@ func (ts *MQTTBackendTestSuite) TestGatewayCommandExecRequest() {
 	token.Wait()
 	assert.NoError(token.Error())
 
-	receivedExecReq := <-ts.backend.GetGatewayCommandExecRequestChan()
+	receivedExecReq := <-gatewayComandExecRequestChan
 	assert.Equal(execReq, receivedExecReq)
 }
 
 func (ts *MQTTBackendTestSuite) TestRawPacketForwarderCommand() {
 	assert := require.New(ts.T())
+	rawPacketForwarderCommandChan := make(chan gw.RawPacketForwarderCommand, 1)
+	ts.backend.SetRawPacketForwarderCommandFunc(func(pl gw.RawPacketForwarderCommand) {
+		rawPacketForwarderCommandChan <- pl
+	})
+
 	id, err := uuid.NewV4()
 	assert.NoError(err)
 
@@ -257,7 +275,7 @@ func (ts *MQTTBackendTestSuite) TestRawPacketForwarderCommand() {
 	token.Wait()
 	assert.NoError(token.Error())
 
-	received := <-ts.backend.GetRawPacketForwarderChan()
+	received := <-rawPacketForwarderCommandChan
 	assert.Equal(pl, received)
 }
 

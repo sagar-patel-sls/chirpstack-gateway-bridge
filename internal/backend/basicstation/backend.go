@@ -25,6 +25,7 @@ import (
 	"github.com/brocaar/chirpstack-api/go/v3/gw"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/basicstation/structs"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/events"
+	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/semtechudp/packets"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/config"
 	"github.com/brocaar/lorawan"
 	"github.com/brocaar/lorawan/band"
@@ -267,6 +268,11 @@ func (b *Backend) ApplyConfiguration(gwConfig gw.GatewayConfiguration) error {
 	return nil
 }
 
+// GetMqttDisconnectFrameChan returns the mqtt connection/disconnection.
+func (b *Backend) GetMqttDisconnectFrameChan(frame packets.PushACKPacket) error {
+	return nil
+}
+
 // RawPacketForwarderCommand sends the given raw command to the packet-forwarder.
 func (b *Backend) RawPacketForwarderCommand(pl gw.RawPacketForwarderCommand) error {
 	var gatewayID lorawan.EUI64
@@ -436,6 +442,8 @@ func (b *Backend) handleGateway(r *http.Request, c *websocket.Conn) {
 				b.statsCache.Delete(gwIDStr + ":rxOK")
 				b.statsCache.Delete(gwIDStr + ":tx")
 				b.statsCache.Delete(gwIDStr + ":txOK")
+				remoteAddr := strings.Split(r.RemoteAddr, ":")
+				ip, _ := remoteAddr[0], remoteAddr[1]
 
 				b.gatewayStatsChan <- gw.GatewayStats{
 					GatewayId:           gatewayID[:],
@@ -445,6 +453,7 @@ func (b *Backend) handleGateway(r *http.Request, c *websocket.Conn) {
 					RxPacketsReceivedOk: rxOK,
 					TxPacketsReceived:   tx,
 					TxPacketsEmitted:    txOK,
+					Ip:                  ip,
 				}
 			case <-done:
 				return

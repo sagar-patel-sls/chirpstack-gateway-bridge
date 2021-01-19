@@ -36,10 +36,11 @@ type Backend struct {
 	// downlink opportunities (e.g. RX1 and RX2).
 	cache *cache.Cache
 
-	downlinkTXAckChan chan gw.DownlinkTXAck
-	uplinkFrameChan   chan gw.UplinkFrame
-	gatewayStatsChan  chan gw.GatewayStats
-	udpSendChan       chan udpPacket
+	downlinkTXAckChan     chan gw.DownlinkTXAck
+	uplinkFrameChan       chan gw.UplinkFrame
+	gatewayStatsChan      chan gw.GatewayStats
+	udpSendChan           chan udpPacket
+	mqttDisconnectionChan chan packets.PullACKPacket
 
 	wg           sync.WaitGroup
 	conn         *net.UDPConn
@@ -47,6 +48,7 @@ type Backend struct {
 	gateways     gateways
 	fakeRxTime   bool
 	skipCRCCheck bool
+	mqttStatus   uint16
 }
 
 // NewBackend creates a new backend.
@@ -72,9 +74,11 @@ func NewBackend(conf config.Config) (*Backend, error) {
 			gateways:           make(map[lorawan.EUI64]gateway),
 			subscribeEventChan: make(chan events.Subscribe),
 		},
-		fakeRxTime:   conf.Backend.SemtechUDP.FakeRxTime,
-		skipCRCCheck: conf.Backend.SemtechUDP.SkipCRCCheck,
-		cache:        cache.New(15*time.Second, 15*time.Second),
+		fakeRxTime:            conf.Backend.SemtechUDP.FakeRxTime,
+		skipCRCCheck:          conf.Backend.SemtechUDP.SkipCRCCheck,
+		cache:                 cache.New(15*time.Second, 15*time.Second),
+		mqttDisconnectionChan: make(chan packets.PullACKPacket),
+		mqttStatus:            65534,
 	}
 
 	go func() {
@@ -123,6 +127,30 @@ func (b *Backend) Close() error {
 	close(b.udpSendChan)
 	b.Unlock()
 	b.wg.Wait()
+	return nil
+}
+
+// GetMqttDisconnectFrameChan returns the mqtt connection/disconnection.
+func (b *Backend) GetMqttDisconnectFrameChan(frame packets.PushACKPacket) error {
+	bytes, err := frame.MarshalBinary()
+	if err != nil {
+		return errors.Wrap(err, "marshal pull ack packet error")
+	}
+
+	b.mqttStatus = frame.RandomToken
+	var addrr = b.gateways.getGW()
+	for gw, row := range addrr {
+		b.udpSendChan <- udpPacket{
+			data: bytes,
+			addr: row.addr,
+		}
+		log.WithFields(log.Fields{
+			"gateway":          gw,
+			"addr":             row.addr,
+			"protocol_version": frame.ProtocolVersion,
+			"data":             frame.RandomToken,
+		}).Info("integration/semtechudp: MQTT Connection Acknowledgement sended")
+	}
 	return nil
 }
 
@@ -443,15 +471,19 @@ func (b *Backend) handlePushData(up udpPacket) error {
 	ack := packets.PushACKPacket{
 		ProtocolVersion: p.ProtocolVersion,
 		RandomToken:     p.RandomToken,
+		MqttStatus:      b.mqttStatus,
 	}
 	bytes, err := ack.MarshalBinary()
 	if err != nil {
 		return err
 	}
+
 	b.udpSendChan <- udpPacket{
 		addr: up.addr,
 		data: bytes,
 	}
+
+	fmt.Println(bytes)
 
 	// gateway stats
 	stats, err := p.GetGatewayStats()
@@ -463,6 +495,7 @@ func (b *Backend) handlePushData(up udpPacket) error {
 		if up.addr.IP.IsLoopback() {
 			ip, err := getOutboundIP()
 			if err != nil {
+				b.mqttStatus = 65534
 				log.WithError(err).Error("backend/semtechudp: get outbound ip error")
 			} else {
 				stats.Ip = ip.String()

@@ -7,6 +7,7 @@ import (
 
 	"github.com/brocaar/chirpstack-api/go/v3/gw"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend"
+	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/semtechudp/packets"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/config"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/integration"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/metadata"
@@ -34,6 +35,7 @@ func Setup(conf config.Config) error {
 	go forwardGatewayConfigurationLoop()
 	go forwardRawPacketForwarderCommandLoop()
 	go forwardRawPacketForwarderEventLoop()
+	go forwardMqttDisconnectionLoop()
 
 	return nil
 }
@@ -77,10 +79,17 @@ func forwardGatewayStatsLoop() {
 			if stats.MetaData == nil {
 				stats.MetaData = make(map[string]string)
 			}
+			MetaData := stats.MetaData
+			stats.MetaData = make(map[string]string)
+			stats.MetaData["IP"] = stats.Ip
+			if len(MetaData) > 0 {
+				for k, v := range metadata.GetMetaData(MetaData) {
+					stats.MetaData[k] = v
+				}
+			}
 			for k, v := range metadata.Get() {
 				stats.MetaData[k] = v
 			}
-
 			if err := integration.GetIntegration().PublishEvent(gatewayID, integration.EventStats, statsID, &stats); err != nil {
 				log.WithError(err).WithFields(log.Fields{
 					"gateway_id": gatewayID,
@@ -169,5 +178,15 @@ func forwardRawPacketForwarderCommandLoop() {
 				log.WithError(err).Error("raw packet-forwarder command error")
 			}
 		}(raw)
+	}
+}
+
+func forwardMqttDisconnectionLoop() {
+	for mqttChannel := range integration.GetIntegration().GetMqttDownlinkFrameChan() {
+		go func(mqttChannel packets.PushACKPacket) {
+			if err := backend.GetBackend().GetMqttDisconnectFrameChan(mqttChannel); err != nil {
+				log.WithError(err).Error("raw packet-forwarder command error")
+			}
+		}(mqttChannel)
 	}
 }

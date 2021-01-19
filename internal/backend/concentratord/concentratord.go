@@ -13,6 +13,7 @@ import (
 
 	"github.com/brocaar/chirpstack-api/go/v3/gw"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/events"
+	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/semtechudp/packets"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/config"
 	"github.com/brocaar/lorawan"
 )
@@ -162,6 +163,11 @@ func (b *Backend) Close() error {
 // GetDownlinkTXAckChan returns the channel for downlink tx acknowledgements.
 func (b *Backend) GetDownlinkTXAckChan() chan gw.DownlinkTXAck {
 	return b.downlinkTXAckChan
+}
+
+// GetMqttDisconnectFrameChan returns the mqtt connection/disconnection.
+func (b *Backend) GetMqttDisconnectFrameChan(frame packets.PushACKPacket) error {
+	return nil
 }
 
 // GetGatewayStatsChan returns the channel for gateway statistics.

@@ -24,8 +24,9 @@ const (
 
 // Protocol versions
 const (
-	ProtocolVersion1 uint8 = 0x01
-	ProtocolVersion2 uint8 = 0x02
+	ProtocolVersion1  uint8 = 0x01
+	ProtocolVersion2  uint8 = 0x02
+	ProtocolVersionFF uint8 = 0xFF
 )
 
 // Errors
@@ -47,7 +48,7 @@ func GetPacketType(data []byte) (PacketType, error) {
 }
 
 func protocolSupported(p uint8) bool {
-	if p == ProtocolVersion1 || p == ProtocolVersion2 {
+	if p == ProtocolVersion1 || p == ProtocolVersion2 || p == ProtocolVersionFF {
 		return true
 	}
 	return false

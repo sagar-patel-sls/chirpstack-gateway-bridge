@@ -100,6 +100,7 @@ func TestGetGatewayStats(t *testing.T) {
 				RxPacketsReceivedOk: 2,
 				TxPacketsReceived:   5,
 				TxPacketsEmitted:    6,
+				MetaData:            map[string]string{},
 			},
 		},
 		{
@@ -125,6 +126,7 @@ func TestGetGatewayStats(t *testing.T) {
 				RxPacketsReceivedOk: 2,
 				TxPacketsReceived:   5,
 				TxPacketsEmitted:    6,
+				MetaData:            map[string]string{},
 			},
 		},
 	}

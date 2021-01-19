@@ -50,7 +50,6 @@ func (p PushDataPacket) GetGatewayStats() (*gw.GatewayStats, error) {
 	if p.Payload.Stat == nil {
 		return nil, nil
 	}
-
 	stats := gw.GatewayStats{
 		GatewayId:           p.GatewayMAC[:],
 		RxPacketsReceived:   p.Payload.Stat.RXNb,
@@ -75,6 +74,11 @@ func (p PushDataPacket) GetGatewayStats() (*gw.GatewayStats, error) {
 			Source:    common.LocationSource_GPS,
 		}
 	}
+	stats.Ip = p.Payload.Stat.IP
+	stats.MetaData = make(map[string]string)
+	if p.Payload.Stat.MetaData != "" {
+		stats.MetaData["MetaData"] = p.Payload.Stat.MetaData
+	}
 
 	// set stats id
 	statsID, err := uuid.NewV4()
@@ -82,7 +86,6 @@ func (p PushDataPacket) GetGatewayStats() (*gw.GatewayStats, error) {
 		return nil, errors.Wrap(err, "new uuid error")
 	}
 	stats.StatsId = statsID[:]
-
 	return &stats, nil
 }
 
@@ -273,16 +276,18 @@ type PushDataPayload struct {
 
 // Stat contains the status of the gateway.
 type Stat struct {
-	Time ExpandedTime `json:"time"` // UTC 'system' time of the gateway, ISO 8601 'expanded' format (e.g 2014-01-12 08:59:28 GMT)
-	Lati float64      `json:"lati"` // GPS latitude of the gateway in degree (float, N is +)
-	Long float64      `json:"long"` // GPS latitude of the gateway in degree (float, E is +)
-	Alti int32        `json:"alti"` // GPS altitude of the gateway in meter RX (integer)
-	RXNb uint32       `json:"rxnb"` // Number of radio packets received (unsigned integer)
-	RXOK uint32       `json:"rxok"` // Number of radio packets received with a valid PHY CRC
-	RXFW uint32       `json:"rxfw"` // Number of radio packets forwarded (unsigned integer)
-	ACKR float64      `json:"ackr"` // Percentage of upstream datagrams that were acknowledged
-	DWNb uint32       `json:"dwnb"` // Number of downlink datagrams received (unsigned integer)
-	TXNb uint32       `json:"txnb"` // Number of packets emitted (unsigned integer)
+	Time     ExpandedTime `json:"time"`     // UTC 'system' time of the gateway, ISO 8601 'expanded' format (e.g 2014-01-12 08:59:28 GMT)
+	Lati     float64      `json:"lati"`     // GPS latitude of the gateway in degree (float, N is +)
+	Long     float64      `json:"long"`     // GPS latitude of the gateway in degree (float, E is +)
+	Alti     int32        `json:"alti"`     // GPS altitude of the gateway in meter RX (integer)
+	RXNb     uint32       `json:"rxnb"`     // Number of radio packets received (unsigned integer)
+	RXOK     uint32       `json:"rxok"`     // Number of radio packets received with a valid PHY CRC
+	RXFW     uint32       `json:"rxfw"`     // Number of radio packets forwarded (unsigned integer)
+	ACKR     float64      `json:"ackr"`     // Percentage of upstream datagrams that were acknowledged
+	DWNb     uint32       `json:"dwnb"`     // Number of downlink datagrams received (unsigned integer)
+	TXNb     uint32       `json:"txnb"`     // Number of packets emitted (unsigned integer)
+	IP       string       `json:"ip"`       // IP Address of Gateway
+	MetaData string       `json:"metaData"` // MetaData of the gateway
 }
 
 // RXPK contain a RF packet and associated metadata.

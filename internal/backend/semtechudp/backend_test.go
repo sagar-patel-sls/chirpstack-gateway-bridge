@@ -686,6 +686,7 @@ func (ts *BackendTestSuite) TestPushData() {
 				RxPacketsReceivedOk: 2,
 				TxPacketsReceived:   4,
 				TxPacketsEmitted:    5,
+				MetaData:            map[string]string{},
 			},
 		},
 		{
@@ -713,6 +714,7 @@ func (ts *BackendTestSuite) TestPushData() {
 				RxPacketsReceivedOk: 2,
 				TxPacketsReceived:   4,
 				TxPacketsEmitted:    5,
+				MetaData:            map[string]string{},
 			},
 		},
 		{

@@ -6,6 +6,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/brocaar/chirpstack-api/go/v3/gw"
+	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/semtechudp/packets"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/config"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/integration/mqtt"
 	"github.com/brocaar/lorawan"
@@ -58,6 +59,9 @@ type Integration interface {
 
 	// GetGatewayCommandExecRequestChan() returns the channel for gateway command execution.
 	GetGatewayCommandExecRequestChan() chan gw.GatewayCommandExecRequest
+
+	// GetMqttDownlinkFrameChan returns the mqtt connection/disconnection.
+	GetMqttDownlinkFrameChan() chan packets.PushACKPacket
 
 	// Close closes the integration.
 	Close() error

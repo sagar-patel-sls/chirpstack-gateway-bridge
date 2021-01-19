@@ -121,3 +121,26 @@ func runCommand(cmdStr string) (string, error) {
 
 	return strings.TrimRight(string(out), "\n\r"), nil
 }
+
+// GetMetaData returns the state packet metadata.
+func GetMetaData(metaData map[string]string) map[string]string {
+	newKV := make(map[string]string)
+	if strings.Contains(metaData["MetaData"], ",") {
+		rows := strings.Split(metaData["MetaData"], ",")
+		for _, row := range rows {
+			kv := strings.SplitN(row, splitDelimiter, 2)
+			if len(kv) != 2 {
+				log.WithFields(log.Fields{
+					"row":             row,
+					"split_delimiter": splitDelimiter,
+				}).Warning("metadata: can not split output in key / value")
+			} else {
+				newKV[kv[0]] = kv[1]
+			}
+		}
+	} else {
+		newKV["MetaData"] = metaData["MetaData"]
+	}
+
+	return newKV
+}

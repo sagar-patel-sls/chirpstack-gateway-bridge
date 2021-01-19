@@ -3,6 +3,7 @@ package mqtt
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"text/template"
@@ -16,6 +17,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/brocaar/chirpstack-api/go/v3/gw"
+	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/semtechudp/packets"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/config"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/integration/mqtt/auth"
 	"github.com/brocaar/lorawan"
@@ -27,9 +29,12 @@ type Backend struct {
 
 	auth                          auth.Authentication
 	conn                          paho.Client
+	udpConn                       *net.UDPConn
 	closed                        bool
+	mqttStatus                    bool
 	clientOpts                    *paho.ClientOptions
 	downlinkFrameChan             chan gw.DownlinkFrame
+	mqttDisconnectionChan         chan packets.PushACKPacket
 	gatewayConfigurationChan      chan gw.GatewayConfiguration
 	gatewayCommandExecRequestChan chan gw.GatewayCommandExecRequest
 	rawPacketForwarderCommandChan chan gw.RawPacketForwarderCommand
@@ -57,6 +62,7 @@ func NewBackend(conf config.Config) (*Backend, error) {
 		gatewayCommandExecRequestChan: make(chan gw.GatewayCommandExecRequest),
 		rawPacketForwarderCommandChan: make(chan gw.RawPacketForwarderCommand),
 		gateways:                      make(map[lorawan.EUI64]struct{}),
+		mqttDisconnectionChan:         make(chan packets.PushACKPacket),
 	}
 
 	switch conf.Integration.MQTT.Auth.Type {
@@ -145,10 +151,17 @@ func NewBackend(conf config.Config) (*Backend, error) {
 func (b *Backend) Close() error {
 	b.Lock()
 	b.closed = true
+	b.mqttStatus = false
 	b.Unlock()
 
 	b.conn.Disconnect(250)
+
 	return nil
+}
+
+// GetMqttDownlinkFrameChan returns the mqtt connection/disconnection.
+func (b *Backend) GetMqttDownlinkFrameChan() chan packets.PushACKPacket {
+	return b.mqttDisconnectionChan
 }
 
 // GetDownlinkFrameChan returns the downlink frame channel.
@@ -275,6 +288,9 @@ func (b *Backend) connect() error {
 		return token.Error()
 	}
 
+	b.mqttStatus = true
+	go b.handleMqttDisconnectionFrame(true)
+
 	return nil
 }
 
@@ -286,6 +302,7 @@ func (b *Backend) connectLoop() {
 				log.Fatal(err)
 			}
 
+			b.mqttStatus = false
 			log.WithError(err).Error("integration/mqtt: connection error")
 			time.Sleep(time.Second * 2)
 
@@ -297,6 +314,8 @@ func (b *Backend) connectLoop() {
 
 func (b *Backend) disconnect() error {
 	mqttDisconnectCounter().Inc()
+	b.mqttStatus = false
+	go b.handleMqttDisconnectionFrame(false)
 
 	b.Lock()
 	defer b.Unlock()
@@ -324,6 +343,8 @@ func (b *Backend) reconnectLoop() {
 
 func (b *Backend) onConnected(c paho.Client) {
 	mqttConnectCounter().Inc()
+	b.mqttStatus = true
+	go b.handleMqttDisconnectionFrame(true)
 
 	b.RLock()
 	defer b.RUnlock()
@@ -345,7 +366,21 @@ func (b *Backend) onConnected(c paho.Client) {
 
 func (b *Backend) onConnectionLost(c paho.Client, err error) {
 	mqttDisconnectCounter().Inc()
+	b.mqttStatus = false
+	go b.handleMqttDisconnectionFrame(false)
 	log.WithError(err).Error("mqtt: connection error")
+}
+
+func (b *Backend) handleMqttDisconnectionFrame(isConnected bool) {
+	var token uint16 = 65534
+	if isConnected {
+		token = 65535
+	}
+	mqttPacket := packets.PushACKPacket{
+		ProtocolVersion: 255,
+		RandomToken:     token,
+	}
+	b.mqttDisconnectionChan <- mqttPacket
 }
 
 func (b *Backend) handleDownlinkFrame(c paho.Client, msg paho.Message) {
@@ -486,5 +521,9 @@ func (b *Backend) publish(gatewayID lorawan.EUI64, event string, fields log.Fiel
 	if token := b.conn.Publish(topic.String(), b.qos, false, bytes); token.Wait() && token.Error() != nil {
 		return token.Error()
 	}
+	if event == "stats" {
+		b.handleMqttDisconnectionFrame(b.mqttStatus)
+	}
+
 	return nil
 }

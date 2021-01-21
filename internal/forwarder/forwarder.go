@@ -8,7 +8,6 @@ import (
 	"github.com/brocaar/chirpstack-api/go/v3/gw"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/events"
-	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/semtechudp/packets"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/config"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/integration"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/metadata"
@@ -39,8 +38,6 @@ func Setup(conf config.Config) error {
 	i.SetDownlinkFrameFunc(downlinkFrameFunc)
 	i.SetGatewayConfigurationFunc(gatewayConfigurationFunc)
 	i.SetRawPacketForwarderCommandFunc(rawPacketForwarderCommandFunc)
-
-	go forwardMqttDisconnectionLoop()
 
 	return nil
 }
@@ -169,14 +166,4 @@ func rawPacketForwarderCommandFunc(pl gw.RawPacketForwarderCommand) {
 			log.WithError(err).Error("raw packet-forwarder command error")
 		}
 	}(pl)
-}
-
-func forwardMqttDisconnectionLoop() {
-	for mqttChannel := range integration.GetIntegration().GetMqttDownlinkFrameChan() {
-		go func(mqttChannel packets.PushACKPacket) {
-			if err := backend.GetBackend().GetMqttDisconnectFrameChan(mqttChannel); err != nil {
-				log.WithError(err).Error("raw packet-forwarder command error")
-			}
-		}(mqttChannel)
-	}
 }

@@ -13,7 +13,6 @@ import (
 
 	"github.com/brocaar/chirpstack-api/go/v3/gw"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/events"
-	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/semtechudp/packets"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/config"
 	"github.com/brocaar/lorawan"
 )
@@ -189,11 +188,6 @@ func (b *Backend) SetRawPacketForwarderEventFunc(f func(gw.RawPacketForwarderEve
 // SetSubscribeEventFunc sets the Subscribe handler func.
 func (b *Backend) SetSubscribeEventFunc(f func(events.Subscribe)) {
 	b.subscribeEventFunc = f
-}
-
-// GetMqttDisconnectFrameChan returns the mqtt connection/disconnection.
-func (b *Backend) GetMqttDisconnectFrameChan(frame packets.PushACKPacket) error {
-	return nil
 }
 
 // SendDownlinkFrame sends the given downlink frame.

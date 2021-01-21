@@ -25,7 +25,6 @@ import (
 	"github.com/brocaar/chirpstack-api/go/v3/gw"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/basicstation/structs"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/events"
-	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/semtechudp/packets"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/config"
 	"github.com/brocaar/lorawan"
 	"github.com/brocaar/lorawan/band"
@@ -247,11 +246,6 @@ func (b *Backend) SendDownlinkFrame(df gw.DownlinkFrame) error {
 
 // ApplyConfiguration is not implemented.
 func (b *Backend) ApplyConfiguration(gwConfig gw.GatewayConfiguration) error {
-	return nil
-}
-
-// GetMqttDisconnectFrameChan returns the mqtt connection/disconnection.
-func (b *Backend) GetMqttDisconnectFrameChan(frame packets.PushACKPacket) error {
 	return nil
 }
 

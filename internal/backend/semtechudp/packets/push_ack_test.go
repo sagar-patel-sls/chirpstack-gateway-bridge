@@ -14,11 +14,11 @@ func TestPushACKPacket(t *testing.T) {
 		PushACKPacket PushACKPacket
 	}{
 		{
-			Bytes:         []byte{2, 0, 0, 1, 0, 0},
+			Bytes:         []byte{2, 0, 0, 1},
 			PushACKPacket: PushACKPacket{ProtocolVersion: ProtocolVersion2},
 		},
 		{
-			Bytes: []byte{2, 123, 0, 1, 0, 0},
+			Bytes: []byte{2, 123, 0, 1},
 			PushACKPacket: PushACKPacket{
 				ProtocolVersion: ProtocolVersion2,
 				RandomToken:     123,

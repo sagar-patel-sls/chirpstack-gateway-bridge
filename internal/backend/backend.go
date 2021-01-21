@@ -10,7 +10,6 @@ import (
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/concentratord"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/events"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/semtechudp"
-	"github.com/brocaar/chirpstack-gateway-bridge/internal/backend/semtechudp/packets"
 	"github.com/brocaar/chirpstack-gateway-bridge/internal/config"
 )
 
@@ -74,7 +73,4 @@ type Backend interface {
 
 	// RawPacketForwarderCommand sends the given raw command to the packet-forwarder.
 	RawPacketForwarderCommand(gw.RawPacketForwarderCommand) error
-
-	// GetMqttDisconnectFrameChan returns the mqtt connection/disconnection.
-	GetMqttDisconnectFrameChan(packets.PushACKPacket) error
 }

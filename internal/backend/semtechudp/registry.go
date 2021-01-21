@@ -12,7 +12,6 @@ import (
 
 // errors
 var (
-	mux                    sync.RWMutex
 	errGatewayDoesNotExist = errors.New("gateway does not exist")
 )
 
@@ -48,14 +47,6 @@ func (c *gateways) get(mac lorawan.EUI64) (gateway, error) {
 	return gw, nil
 }
 
-// getGW returns the gateway object.
-func (c *gateways) getGW() map[lorawan.EUI64]gateway {
-	c.RLock()
-	defer c.RUnlock()
-
-	return c.gateways
-}
-
 // Set creates or updates the gateway for the given Gateway ID.
 // Note that set must only be called for PullData frames! The UDP Packet
 // Forwarded uses two UDP sockets and the socket responsible for sending the
@@ -76,16 +67,6 @@ func (c *gateways) set(gatewayID lorawan.EUI64, gw gateway) error {
 		})
 	}
 
-	c.gateways[gatewayID] = gw
-	return nil
-}
-
-// PushAck is used for sending mqtt connection status.
-func (c *gateways) setPushAck(gatewayID lorawan.EUI64, gw gateway) error {
-	c.Lock()
-	defer c.Unlock()
-
-	c.gateways[gatewayID] = gw
 	return nil
 }
 

@@ -10,22 +10,20 @@ import (
 type PushACKPacket struct {
 	ProtocolVersion uint8
 	RandomToken     uint16
-	MqttStatus      uint16
 }
 
 // MarshalBinary marshals the object in binary form.
 func (p PushACKPacket) MarshalBinary() ([]byte, error) {
-	out := make([]byte, 6)
+	out := make([]byte, 4)
 	out[0] = p.ProtocolVersion
 	binary.LittleEndian.PutUint16(out[1:3], p.RandomToken)
-	binary.LittleEndian.PutUint16(out[4:6], p.MqttStatus)
 	out[3] = byte(PushACK)
 	return out, nil
 }
 
 // UnmarshalBinary decodes the object from binary form.
 func (p *PushACKPacket) UnmarshalBinary(data []byte) error {
-	if len(data) != 6 {
+	if len(data) != 4 {
 		return errors.New("gateway: 4 bytes of data are expected")
 	}
 	if data[3] != byte(PushACK) {
@@ -37,6 +35,5 @@ func (p *PushACKPacket) UnmarshalBinary(data []byte) error {
 	}
 	p.ProtocolVersion = data[0]
 	p.RandomToken = binary.LittleEndian.Uint16(data[1:3])
-	p.MqttStatus = binary.LittleEndian.Uint16(data[4:6])
 	return nil
 }

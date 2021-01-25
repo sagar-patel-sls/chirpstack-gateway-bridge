@@ -67,6 +67,7 @@ func (c *gateways) set(gatewayID lorawan.EUI64, gw gateway) error {
 		})
 	}
 
+	c.gateways[gatewayID] = gw
 	return nil
 }
 
